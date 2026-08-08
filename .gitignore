@@ -1,0 +1,14 @@
+# Compiled binaries
+/bin/
+/dist/
+
+# Local generated/downloaded VM assets
+/vm/
+/.local/
+
+# Go test output
+coverage.out
+*.test
+
+# macOS
+.DS_Store
