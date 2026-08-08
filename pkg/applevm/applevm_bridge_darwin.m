@@ -113,18 +113,20 @@ static VZVirtualMachineConfiguration *applevm_build_configuration(const applevm_
 
     VZLinuxBootLoader *bootLoader = [[[VZLinuxBootLoader alloc] initWithKernelURL:kernelURL] autorelease];
 
-    NSString *initramfsPath = [NSString stringWithUTF8String:config->initramfs_path];
+    if (config->initramfs_path != NULL && config->initramfs_path[0] != '\0') {
+        NSString *initramfsPath = [NSString stringWithUTF8String:config->initramfs_path];
 
-    NSURL *initramfsURL = [NSURL fileURLWithPath:initramfsPath];
+        NSURL *initramfsURL = [NSURL fileURLWithPath:initramfsPath];
 
-    [bootLoader setInitialRamdiskURL:initramfsURL];
+        [bootLoader setInitialRamdiskURL:initramfsURL];
+    }
 
     NSString *commandLine = nil;
 
     if (config->kernel_command_line != NULL && config->kernel_command_line[0] != '\0') {
         commandLine = [NSString stringWithUTF8String:config->kernel_command_line];
     } else {
-        commandLine = @"console=hvc0 root=/dev/vda rw";
+        commandLine = @"console=hvc0 root=/dev/vda rootfstype=ext4 rootwait rw init=/sbin/kernlet-init";
     }
 
     [bootLoader setCommandLine:commandLine];

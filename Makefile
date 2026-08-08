@@ -21,7 +21,6 @@ applevm-smoke:
 applevm-run: applevm-assets applevm-smoke
 	./bin/applevm-smoke \
 		-kernel ./.local/applevm/vmlinux \
-		-initramfs ./.local/applevm/initramfs.cpio.gz \
 		-disk ./.local/applevm/rootfs.img \
 		-cpus 2 \
 		-memory 512

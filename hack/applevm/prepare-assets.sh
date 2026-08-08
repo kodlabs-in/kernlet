@@ -63,7 +63,6 @@ if [[ ! -f "$ALPINE_ARCHIVE" ]]; then
 fi
 
 ROOTFS_SRC="$WORK/rootfs"
-INITRAMFS_SRC="$WORK/initramfs"
 
 echo "==> Building Alpine root filesystem"
 
@@ -79,7 +78,6 @@ sudo tee "$ROOTFS_SRC/sbin/kernlet-init" >/dev/null <<'EOF'
 
 mount -t proc proc /proc
 mount -t sysfs sysfs /sys
-mount -t devtmpfs devtmpfs /dev
 
 echo
 echo "================================"
@@ -108,53 +106,8 @@ sudo chown \
     "$(id -u):$(id -g)" \
     "$OUT/rootfs.img"
 
-echo "==> Building initramfs"
-
-rm -rf "$INITRAMFS_SRC"
-mkdir -p "$INITRAMFS_SRC"
-
-COPYFILE_DISABLE=1 \
-    tar -xzf "$ALPINE_ARCHIVE" \
-    -C "$INITRAMFS_SRC"
-
-cat > "$INITRAMFS_SRC/init" <<'EOF'
-#!/bin/sh
-
-export PATH=/bin:/sbin:/usr/bin:/usr/sbin
-
-echo "kernlet initramfs started"
-
-mount -t devtmpfs devtmpfs /dev 2>/dev/null || true
-
-mkdir -p /newroot
-
-echo "kernlet: mounting /dev/vda..."
-
-if ! mount -t ext4 -o rw /dev/vda /newroot; then
-    echo "kernlet: FAILED to mount /dev/vda"
-    exec /bin/sh -i
-fi
-
-echo "kernlet: switching to root filesystem"
-
-exec /bin/busybox switch_root \
-    /newroot \
-    /sbin/kernlet-init
-EOF
-
-chmod +x "$INITRAMFS_SRC/init"
-
-(
-    cd "$INITRAMFS_SRC"
-
-    find . -print |
-        cpio -o -H newc 2>/dev/null
-) |
-    gzip -9 > "$OUT/initramfs.cpio.gz"
-
 echo
 echo "Kernlet VM assets are ready:"
 echo
 echo "  $OUT/vmlinux"
-echo "  $OUT/initramfs.cpio.gz"
 echo "  $OUT/rootfs.img"

@@ -9,7 +9,10 @@ type Config struct {
 	// Linux kernel that Apple will boot.
 	KernelPath string
 
-	// Initial filesystem loaded into RAM during Linux boot.
+	// Optional initial filesystem loaded into RAM during Linux boot.
+	//
+	// Most Kernlet VMs should boot directly from RootDiskPath.
+	// This is kept for guests that require early userspace.
 	InitramfsPath string
 
 	// Main Linux disk.
@@ -35,12 +38,10 @@ func (c Config) validate() error {
 		return fmt.Errorf("kernel: %w", err)
 	}
 
-	if c.InitramfsPath == "" {
-		return fmt.Errorf("initramfs path is required")
-	}
-
-	if _, err := os.Stat(c.InitramfsPath); err != nil {
-		return fmt.Errorf("initramfs: %w", err)
+	if c.InitramfsPath != "" {
+		if _, err := os.Stat(c.InitramfsPath); err != nil {
+			return fmt.Errorf("initramfs: %w", err)
+		}
 	}
 
 	if c.RootDiskPath == "" {

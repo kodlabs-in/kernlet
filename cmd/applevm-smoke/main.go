@@ -13,7 +13,7 @@ import (
 func main() {
 	kernel := flag.String("kernel", "", "path to Linux kernel")
 
-	initramfs := flag.String("initramfs", "", "path to initramfs")
+	initramfs := flag.String("initramfs", "", "optional path to initramfs")
 
 	disk := flag.String("disk", "", "path to root disk image")
 
@@ -23,7 +23,7 @@ func main() {
 
 	flag.Parse()
 
-	if *kernel == "" || *initramfs == "" || *disk == "" {
+	if *kernel == "" || *disk == "" {
 		flag.Usage()
 		os.Exit(2)
 	}
@@ -37,7 +37,7 @@ func main() {
 
 		MemorySize: *memoryMiB * 1024 * 1024,
 
-		KernelCommandLine: "console=hvc0 root=/dev/vda rw",
+		KernelCommandLine: "console=hvc0 root=/dev/vda rootfstype=ext4 rootwait rw init=/sbin/kernlet-init",
 	}
 
 	vm, err := applevm.New(config)
