@@ -13,6 +13,8 @@ import "C"
 
 import (
 	"errors"
+	"fmt"
+	"os"
 	"unsafe"
 )
 
@@ -97,4 +99,23 @@ func nativeError(cErr *C.char, fallback string) error {
 	defer C.applevm_error_free(cErr)
 
 	return errors.New(C.GoString(cErr))
+}
+
+func (vm *nativeVM) dialVsock(port uint32) (Conn, error) {
+	var cErr *C.char
+	var fd C.int
+
+	result := C.applevm_vsock_connect(vm.handle, C.uint32_t(port), &fd, &cErr)
+
+	if result != 0 {
+		return nil, nativeError(cErr, "failed to connect to guest vsock")
+	}
+
+	file := os.NewFile(uintptr(fd), fmt.Sprintf("applevm-vsock-%d", port))
+
+	if file == nil {
+		return nil, errors.New("failed to create Go file from vsock")
+	}
+
+	return file, nil
 }

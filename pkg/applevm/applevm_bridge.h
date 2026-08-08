@@ -42,4 +42,14 @@ void applevm_destroy(applevm_handle_t *vm);
 // Free error strings created by Objective-C/C.
 void applevm_error_free(char *error_message);
 
+// Connect from the macOS host to a port
+// being listened to inside the Linux guest.
+//
+// fd_out receives a connected file descriptor.
+//
+// Returns:
+//   0  = success
+//  -1  = failure
+int applevm_vsock_connect(applevm_handle_t *vm, uint32_t port, int *fd_out, char **error_out);
+
 #endif

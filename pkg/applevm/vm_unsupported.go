@@ -19,3 +19,7 @@ func (vm *VM) Stop() error {
 func (vm *VM) Close() error {
 	return nil
 }
+
+func (vm *VM) DialVsock(port uint32) (Conn, error) {
+	return nil, ErrUnsupported
+}

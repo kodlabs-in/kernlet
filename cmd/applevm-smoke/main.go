@@ -1,12 +1,15 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
 	"os"
 	"os/signal"
+	"time"
 
+	"github.com/kodlabs-in/kernlet/internal/guestproto"
 	"github.com/kodlabs-in/kernlet/pkg/applevm"
 )
 
@@ -37,7 +40,7 @@ func main() {
 
 		MemorySize: *memoryMiB * 1024 * 1024,
 
-		KernelCommandLine: "console=hvc0 root=/dev/vda rootfstype=ext4 rootwait rw init=/sbin/kernlet-init",
+		KernelCommandLine: "console=hvc0 root=/dev/vda rootfstype=ext4 rootwait rw init=/sbin/kernlet-agent",
 	}
 
 	vm, err := applevm.New(config)
@@ -54,6 +57,45 @@ func main() {
 	}
 
 	fmt.Println("VM started")
+	// Temporary V1 readiness delay.
+	//
+	// Later the guest protocol itself will provide
+	// proper readiness handling.
+	time.Sleep(500 * time.Millisecond)
+
+	fmt.Println("connecting to kernlet-agent...")
+
+	conn, err := vm.DialVsock(guestproto.Port)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	defer conn.Close()
+
+	encoder := json.NewEncoder(conn)
+	decoder := json.NewDecoder(conn)
+
+	request := guestproto.Request{
+		ID:     1,
+		Method: "ping",
+	}
+
+	if err := encoder.Encode(request); err != nil {
+		log.Fatal(err)
+	}
+
+	var response guestproto.Response
+
+	if err := decoder.Decode(&response); err != nil {
+		log.Fatal(err)
+	}
+
+	if !response.OK {
+		log.Fatalf("guest request failed: %s", response.Error)
+	}
+
+	fmt.Printf("guest replied: %s\n", response.Message)
+
 	fmt.Println("press Ctrl-C to stop")
 
 	signals := make(chan os.Signal, 1)

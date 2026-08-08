@@ -9,6 +9,8 @@
 #include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
+#include <unistd.h>
 
 struct applevm_handle {
     VZVirtualMachine *vm;
@@ -23,6 +25,9 @@ typedef struct {
     pthread_cond_t condition;
 
     int finished;
+
+    int value;
+
     char *error_message;
 } applevm_waiter_t;
 
@@ -57,6 +62,7 @@ static void applevm_waiter_init(applevm_waiter_t *waiter) {
     pthread_cond_init(&waiter->condition, NULL);
 
     waiter->finished = 0;
+    waiter->value = -1;
     waiter->error_message = NULL;
 }
 
@@ -72,7 +78,6 @@ static void applevm_waiter_finish(applevm_waiter_t *waiter, NSError *error) {
     pthread_mutex_unlock(&waiter->mutex);
 }
 
-
 static void applevm_waiter_finish_message(applevm_waiter_t *waiter, const char *message) {
     pthread_mutex_lock(&waiter->mutex);
 
@@ -83,6 +88,15 @@ static void applevm_waiter_finish_message(applevm_waiter_t *waiter, const char *
     pthread_mutex_unlock(&waiter->mutex);
 }
 
+static void applevm_waiter_finish_value(applevm_waiter_t *waiter, int value) {
+    pthread_mutex_lock(&waiter->mutex);
+
+    waiter->value = value;
+    waiter->finished = 1;
+
+    pthread_cond_signal(&waiter->condition);
+    pthread_mutex_unlock(&waiter->mutex);
+}
 
 static char *applevm_waiter_wait(applevm_waiter_t *waiter) {
     pthread_mutex_lock(&waiter->mutex);
@@ -126,7 +140,7 @@ static VZVirtualMachineConfiguration *applevm_build_configuration(const applevm_
     if (config->kernel_command_line != NULL && config->kernel_command_line[0] != '\0') {
         commandLine = [NSString stringWithUTF8String:config->kernel_command_line];
     } else {
-        commandLine = @"console=hvc0 root=/dev/vda rootfstype=ext4 rootwait rw init=/sbin/kernlet-init";
+        commandLine = @"console=hvc0 root=/dev/vda rootfstype=ext4 rootwait rw init=/sbin/kernlet-agent";
     }
 
     [bootLoader setCommandLine:commandLine];
@@ -157,7 +171,11 @@ static VZVirtualMachineConfiguration *applevm_build_configuration(const applevm_
 
     VZVirtioEntropyDeviceConfiguration *entropy = [[[VZVirtioEntropyDeviceConfiguration alloc] init] autorelease];
 
-    [configuration setEntropyDevices:@[entropy]];
+    [configuration setEntropyDevices:@[ entropy ]];
+
+    VZVirtioSocketDeviceConfiguration *socketDevice = [[[VZVirtioSocketDeviceConfiguration alloc] init] autorelease];
+
+    [configuration setSocketDevices:@[ socketDevice ]];
 
     return configuration;
 }
@@ -346,6 +364,88 @@ void applevm_destroy(applevm_handle_t *handle) {
     }
 }
 
-void applevm_error_free(char *error_message) {
-    free(error_message);
+void applevm_error_free(char *error_message) { free(error_message); }
+
+int applevm_vsock_connect(applevm_handle_t *handle, uint32_t port, int *fd_out, char **error_out) {
+    if (error_out != NULL) {
+        *error_out = NULL;
+    }
+
+    if (fd_out != NULL) {
+        *fd_out = -1;
+    }
+
+    if (handle == NULL || handle->vm == nil) {
+        applevm_set_error(error_out, "invalid VM handle");
+
+        return -1;
+    }
+
+    if (fd_out == NULL) {
+        applevm_set_error(error_out, "fd_out is NULL");
+
+        return -1;
+    }
+
+    applevm_waiter_t waiter;
+    applevm_waiter_init(&waiter);
+
+    applevm_waiter_t *waiter_ptr = &waiter;
+    VZVirtualMachine *vm = handle->vm;
+
+    dispatch_async(handle->queue, ^{
+        @autoreleasepool {
+            NSArray<VZSocketDevice *> *devices = [vm socketDevices];
+
+            if ([devices count] == 0) {
+                applevm_waiter_finish_message(waiter_ptr, "virtual machine has no vsock device");
+
+                return;
+            }
+
+            VZVirtioSocketDevice *socketDevice = (VZVirtioSocketDevice *)[devices firstObject];
+
+            [socketDevice connectToPort:port completionHandler:^(VZVirtioSocketConnection *connection, NSError *error) {
+                @autoreleasepool {
+                    if (error != nil) {
+                        applevm_waiter_finish(waiter_ptr, error);
+
+                        return;
+                    }
+
+                    if (connection == nil) {
+                        applevm_waiter_finish_message(waiter_ptr, "vsock connection is nil");
+
+                        return;
+                    }
+
+                    int fd = dup([connection fileDescriptor]);
+
+                    if (fd < 0) {
+                        applevm_waiter_finish_message(waiter_ptr, strerror(errno));
+
+                        return;
+                    }
+
+                    applevm_waiter_finish_value(waiter_ptr, fd);
+                }
+            }];
+        }
+    });
+
+    char *operation_error = applevm_waiter_wait(&waiter);
+
+    if (operation_error != NULL) {
+        if (error_out != NULL) {
+            *error_out = operation_error;
+        } else {
+            free(operation_error);
+        }
+
+        return -1;
+    }
+
+    *fd_out = waiter.value;
+
+    return 0;
 }

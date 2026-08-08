@@ -26,5 +26,5 @@ applevm-run: applevm-assets applevm-smoke
 		-memory 512
 
 applevm-clean:
-	sudo rm -rf ./.local/applevm
+	rm -rf ./.local/applevm
 	rm -f ./bin/applevm-smoke

@@ -71,3 +71,19 @@ func (vm *VM) Close() error {
 
 	return nil
 }
+
+func (vm *VM) DialVsock(port uint32) (Conn, error) {
+	vm.mu.Lock()
+	defer vm.mu.Unlock()
+
+	if vm.native == nil {
+		return nil, ErrClosed
+	}
+
+	conn, err := vm.native.dialVsock(port)
+	if err != nil {
+		return nil, fmt.Errorf("applevm: dial guest vsock port %d: %w", port, err)
+	}
+
+	return conn, nil
+}
