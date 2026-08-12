@@ -83,7 +83,7 @@ func main() {
 		Hostname: "kernlet-workload",
 		Args: []string{
 			"/proc/self/exe",
-			"--hostname",
+			"--identity",
 		},
 	}
 

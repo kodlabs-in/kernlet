@@ -30,14 +30,14 @@ func main() {
 		return
 	}
 
-	if len(os.Args) == 2 && os.Args[1] == "--hostname" {
+	if len(os.Args) == 2 && os.Args[1] == "--identity" {
 		hostname, err := os.Hostname()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "kernlet-agent: read hostname: %v\n", err)
 			os.Exit(1)
 		}
 
-		fmt.Println(hostname)
+		fmt.Printf("hostname=%s pid=%d ppid=%d\n", hostname, os.Getpid(), os.Getppid())
 
 		return
 	}

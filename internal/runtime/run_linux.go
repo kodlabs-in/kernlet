@@ -30,7 +30,7 @@ func Run(command []string, hostname string) (string, error) {
 	cmd := exec.Command("/proc/self/exe", args...)
 
 	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Cloneflags: syscall.CLONE_NEWUTS,
+		Cloneflags: syscall.CLONE_NEWUTS | syscall.CLONE_NEWPID,
 	}
 
 	output, err := cmd.CombinedOutput()
