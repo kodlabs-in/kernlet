@@ -16,8 +16,29 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == kernruntime.InitCommand {
+		if err := kernruntime.InitProcess(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "kernlet-agent: runtime init: %v\n", err)
+			os.Exit(1)
+		}
+
+		return
+	}
+
 	if len(os.Args) == 2 && os.Args[1] == "--version" {
 		fmt.Println("kernlet-agent")
+		return
+	}
+
+	if len(os.Args) == 2 && os.Args[1] == "--hostname" {
+		hostname, err := os.Hostname()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "kernlet-agent: read hostname: %v\n", err)
+			os.Exit(1)
+		}
+
+		fmt.Println(hostname)
+
 		return
 	}
 
@@ -120,7 +141,7 @@ func handleRequest(request guestproto.Request) guestproto.Response {
 		}
 
 	case "run":
-		output, err := kernruntime.Run(request.Args)
+		output, err := kernruntime.Run(request.Args, request.Hostname)
 		if err != nil {
 			return guestproto.Response{
 				ID:      request.ID,

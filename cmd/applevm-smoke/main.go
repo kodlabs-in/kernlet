@@ -78,11 +78,12 @@ func main() {
 	fmt.Println("requesting guest process...")
 
 	request := guestproto.Request{
-		ID:     1,
-		Method: "run",
+		ID:       1,
+		Method:   "run",
+		Hostname: "kernlet-workload",
 		Args: []string{
 			"/proc/self/exe",
-			"--version",
+			"--hostname",
 		},
 	}
 

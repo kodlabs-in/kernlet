@@ -3,9 +3,10 @@ package guestproto
 const Port uint32 = 10789
 
 type Request struct {
-	ID     uint64   `json:"id"`
-	Method string   `json:"method"`
-	Args   []string `json:"args,omitempty"`
+	ID       uint64   `json:"id"`
+	Method   string   `json:"method"`
+	Args     []string `json:"args,omitempty"`
+	Hostname string   `json:"hostname,omitempty"`
 }
 
 type Response struct {
