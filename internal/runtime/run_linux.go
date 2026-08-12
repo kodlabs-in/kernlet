@@ -2,20 +2,20 @@ package runtime
 
 import (
 	"fmt"
-	"os"
 	"os/exec"
 )
 
-func Run(command []string) error {
+func Run(command []string) (string, error) {
 	if len(command) == 0 {
-		return fmt.Errorf("no command provided")
+		return "", fmt.Errorf("no command provided")
 	}
 
 	cmd := exec.Command(command[0], command[1:]...)
 
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return string(output), fmt.Errorf("run %q: %w", command[0], err)
+	}
 
-	return cmd.Run()
+	return string(output), nil
 }

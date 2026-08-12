@@ -75,9 +75,15 @@ func main() {
 	encoder := json.NewEncoder(conn)
 	decoder := json.NewDecoder(conn)
 
+	fmt.Println("requesting guest process...")
+
 	request := guestproto.Request{
 		ID:     1,
-		Method: "ping",
+		Method: "run",
+		Args: []string{
+			"/proc/self/exe",
+			"--version",
+		},
 	}
 
 	if err := encoder.Encode(request); err != nil {
@@ -91,10 +97,10 @@ func main() {
 	}
 
 	if !response.OK {
-		log.Fatalf("guest request failed: %s", response.Error)
+		log.Fatalf("guest process failed: %s\n%s", response.Error, response.Message)
 	}
 
-	fmt.Printf("guest replied: %s\n", response.Message)
+	fmt.Printf("guest process output: %s", response.Message)
 
 	fmt.Println("press Ctrl-C to stop")
 

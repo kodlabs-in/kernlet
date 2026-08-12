@@ -122,14 +122,12 @@ static VZVirtualMachineConfiguration *applevm_build_configuration(const applevm_
     [configuration setMemorySize:config->memory_size];
 
     NSString *kernelPath = [NSString stringWithUTF8String:config->kernel_path];
-
     NSURL *kernelURL = [NSURL fileURLWithPath:kernelPath];
 
     VZLinuxBootLoader *bootLoader = [[[VZLinuxBootLoader alloc] initWithKernelURL:kernelURL] autorelease];
 
     if (config->initramfs_path != NULL && config->initramfs_path[0] != '\0') {
         NSString *initramfsPath = [NSString stringWithUTF8String:config->initramfs_path];
-
         NSURL *initramfsURL = [NSURL fileURLWithPath:initramfsPath];
 
         [bootLoader setInitialRamdiskURL:initramfsURL];
@@ -148,7 +146,6 @@ static VZVirtualMachineConfiguration *applevm_build_configuration(const applevm_
     [configuration setBootLoader:bootLoader];
 
     NSString *rootDiskPath = [NSString stringWithUTF8String:config->root_disk_path];
-
     NSURL *rootDiskURL = [NSURL fileURLWithPath:rootDiskPath];
 
     VZDiskImageStorageDeviceAttachment *diskAttachment = [[[VZDiskImageStorageDeviceAttachment alloc] initWithURL:rootDiskURL readOnly:NO error:error_out] autorelease];
@@ -162,7 +159,6 @@ static VZVirtualMachineConfiguration *applevm_build_configuration(const applevm_
     [configuration setStorageDevices:@[blockDevice]];
 
     VZVirtioConsoleDeviceSerialPortConfiguration *console = [[[VZVirtioConsoleDeviceSerialPortConfiguration alloc] init] autorelease];
-
     VZFileHandleSerialPortAttachment *stdio = [[[VZFileHandleSerialPortAttachment alloc] initWithFileHandleForReading:[NSFileHandle fileHandleWithStandardInput] fileHandleForWriting:[NSFileHandle fileHandleWithStandardOutput]] autorelease];
 
     [console setAttachment:stdio];
@@ -171,11 +167,11 @@ static VZVirtualMachineConfiguration *applevm_build_configuration(const applevm_
 
     VZVirtioEntropyDeviceConfiguration *entropy = [[[VZVirtioEntropyDeviceConfiguration alloc] init] autorelease];
 
-    [configuration setEntropyDevices:@[ entropy ]];
+    [configuration setEntropyDevices:@[entropy]];
 
     VZVirtioSocketDeviceConfiguration *socketDevice = [[[VZVirtioSocketDeviceConfiguration alloc] init] autorelease];
 
-    [configuration setSocketDevices:@[ socketDevice ]];
+    [configuration setSocketDevices:@[socketDevice]];
 
     return configuration;
 }
@@ -364,7 +360,9 @@ void applevm_destroy(applevm_handle_t *handle) {
     }
 }
 
-void applevm_error_free(char *error_message) { free(error_message); }
+void applevm_error_free(char *error_message) {
+  free(error_message);
+}
 
 int applevm_vsock_connect(applevm_handle_t *handle, uint32_t port, int *fd_out, char **error_out) {
     if (error_out != NULL) {

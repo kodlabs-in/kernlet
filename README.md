@@ -1,87 +1,172 @@
 # Kernlet
 
-**Kernlet is a lightweight container runtime foundation built around native Linux isolation and platform-native virtualization.**
+Kernlet is KodLabs' lightweight container-runtime foundation built around native Linux isolation and platform-native virtualization.
 
-Kernlet provides the low-level pieces needed to run Linux containers while keeping the runtime small, understandable, and under our control.
-
-On Linux, Kernlet works close to kernel primitives such as namespaces, mounts, processes, and cgroups.
-
-On macOS, Kernlet uses Apple's `Virtualization.framework` to provide the Linux environment required by the container runtime.
+It provides a controlled runtime layer for internal services that need to execute isolated Linux workloads without directly managing virtual machines, guest communication, namespaces, filesystems, cgroups, or container processes.
 
 Kernlet is actively developed and used within KodLabs systems.
 
-> Public APIs and runtime internals may evolve as the project grows.
-
----
+> Public APIs and runtime internals may evolve as internal requirements grow.
 
 ## Why Kernlet?
 
-Containers look simple from the outside:
+KodLabs services need a consistent way to run Linux workloads across different host platforms.
 
-```bash
-docker run alpine
-```
+On Linux, Kernlet can work directly with kernel isolation primitives.
 
-But underneath that command are several different systems working together:
+On macOS, Kernlet first creates a lightweight Linux virtual machine using Apple's native `Virtualization.framework`.
 
 ```text
-OCI Image
+Internal service
+      │
+      ▼
+    Kernlet
+      │
+      ├── macOS
+      │     └── Apple Virtualization.framework
+      │              └── Linux VM
+      │
+      └── Linux
+            └── Host Linux kernel
+                      │
+                      ▼
+              Container runtime
+                      │
+                      ├── processes
+                      ├── namespaces
+                      ├── mounts
+                      ├── filesystems
+                      ├── cgroups
+                      └── networking
+```
+
+The host platform changes, but the container execution model remains Linux-based.
+
+## Current milestone
+
+AppleVM V1 and the first Linux runtime milestone are complete.
+
+Kernlet can currently:
+
+- create a Linux VM on Apple Silicon;
+- boot Linux directly from a kernel and ext4 root disk;
+- start `kernlet-agent` as Linux PID 1;
+- communicate between macOS and Linux over VirtIO vsock;
+- exchange newline-delimited JSON requests and responses;
+- execute an ordinary Linux guest process;
+- capture the process output;
+- return the output to the macOS host.
+
+The complete working path is:
+
+```text
+macOS host
+    │
+    │ JSON run request
+    ▼
+pkg/applevm
+    │
+    │ VirtIO vsock
+    ▼
+Linux VM
     │
     ▼
-Container Runtime
+kernlet-agent (PID 1)
     │
-    ├── namespaces
-    ├── cgroups
-    ├── mounts
-    ├── filesystem
-    └── processes
-         │
-         ▼
-      Linux Kernel
+    ▼
+internal/runtime
+    │
+    ▼
+Linux child process
+    │
+    │ stdout and stderr
+    ▼
+kernlet-agent
+    │
+    │ JSON response
+    ▼
+macOS host
 ```
 
-Kernlet exposes and controls these pieces directly rather than hiding them behind a large runtime stack.
+The child process is not a container yet. It currently shares the guest agent's hostname, namespaces, root filesystem, and resource limits.
 
-The goal is to provide a focused container runtime that can be embedded into higher-level KodLabs infrastructure while remaining useful as a standalone open-source project.
+## Architecture boundaries
 
----
+Kernlet separates machine management from Linux container execution.
 
-## Architecture
+### `pkg/applevm`
 
-Kernlet separates platform-specific machine management from Linux container execution.
+`pkg/applevm` owns the macOS virtualization layer.
 
-```text
-                         Kernlet
-                            │
-               ┌────────────┴────────────┐
-               │                         │
-             macOS                     Linux
-               │                         │
-               ▼                         ▼
-          pkg/applevm             Container Runtime
-               │                         │
-               ▼                         ├── Namespaces
-      Virtualization.framework          ├── Mounts
-               │                         ├── Cgroups
-               ▼                         ├── Processes
-           Linux VM                     └── Filesystems
-               │
-               └──────────────► Linux container environment
-```
+It handles:
 
-### macOS
+- VM configuration;
+- virtual CPU configuration;
+- guest memory configuration;
+- Linux direct kernel boot;
+- VirtIO block storage;
+- VirtIO console;
+- VirtIO entropy;
+- VirtIO socket devices;
+- VM start and stop operations;
+- VM resource cleanup;
+- host connections to guest vsock ports.
 
-macOS does not provide Linux namespaces or cgroups.
+It does not implement Linux container isolation.
 
-Kernlet therefore creates a lightweight Linux virtual machine using Apple's native `Virtualization.framework`.
+### `kernlet-agent`
 
-The current VM stack looks like:
+`kernlet-agent` runs inside the Linux guest as PID 1.
+
+It currently:
+
+- mounts `/proc`;
+- mounts `/sys`;
+- listens on VirtIO vsock port `10789`;
+- accepts host connections;
+- decodes JSON requests;
+- dispatches guest operations;
+- executes ordinary Linux child processes;
+- captures process output;
+- returns JSON responses.
+
+Future container operations will be implemented behind this agent.
+
+### `internal/runtime`
+
+`internal/runtime` owns Linux process and container execution.
+
+It currently:
+
+- validates process argument vectors;
+- starts an executable without invoking a shell;
+- waits for the process to finish;
+- captures stdout and stderr;
+- reports execution errors.
+
+This layer will progressively add:
+
+- UTS namespaces;
+- PID namespaces;
+- mount namespaces;
+- isolated root filesystems;
+- process security controls;
+- cgroups;
+- OCI image execution;
+- network namespaces.
+
+## AppleVM
+
+The macOS VM layer uses the following native integration path:
 
 ```text
 Go
  │
  ▼
 pkg/applevm
+ │
+ ▼
+cgo
  │
  ▼
 C ABI
@@ -93,121 +178,227 @@ Objective-C
 Apple Virtualization.framework
  │
  ▼
-Linux
+Linux VM
 ```
 
-`pkg/applevm` provides a small Go API while keeping Objective-C and Apple-specific implementation details behind the package boundary.
+The public Go package keeps Apple-specific implementation details hidden from the rest of Kernlet.
 
-Example:
+AppleVM currently supports:
 
-```go
-config := applevm.Config{
-    KernelPath:    "./vmlinux",
-    InitramfsPath: "./initramfs.cpio.gz",
-    RootDiskPath:  "./rootfs.img",
+- configurable virtual CPUs;
+- configurable guest memory;
+- Linux kernel command-line arguments;
+- direct Linux kernel boot;
+- optional initramfs configuration;
+- writable VirtIO block storage;
+- VirtIO console output;
+- VirtIO entropy;
+- VirtIO vsock;
+- VM start;
+- VM stop;
+- VM resource cleanup;
+- macOS and Linux build isolation.
 
-    CPUCount:   2,
-    MemorySize: 512 * 1024 * 1024,
-}
+## Guest environment
 
-vm, err := applevm.New(config)
-if err != nil {
-    return err
-}
-defer vm.Close()
-
-if err := vm.Start(); err != nil {
-    return err
-}
-```
-
----
-
-## AppleVM
-
-`pkg/applevm` is Kernlet's macOS virtualization layer.
-
-It currently supports:
-
-* Linux kernel direct boot
-* initramfs
-* VirtIO block storage
-* VirtIO console
-* VirtIO entropy
-* configurable CPU count
-* configurable guest memory
-* Linux kernel command-line arguments
-* VM start and stop lifecycle
-* macOS / Linux build isolation
-
-The VM itself remains intentionally simple.
-
-Kernlet does not ask macOS to understand Linux filesystems or containers. Apple provides virtual hardware; Linux handles the rest.
+The current guest environment is intentionally minimal.
 
 ```text
-rootfs.img
-    │
-    ▼
-Virtualization.framework
-    │
-    ▼
-VirtIO block device
-    │
-    ▼
-/dev/vda
-    │
-    ▼
-Linux filesystem
+/
+├── dev/
+├── proc/
+├── run/
+├── sbin/
+│   └── kernlet-agent
+├── sys/
+└── tmp/
 ```
 
----
+The guest does not currently include:
 
-## Runtime Assets
+- Alpine Linux;
+- BusyBox;
+- a shell;
+- a package manager;
+- general-purpose Linux commands.
 
-Linux VM assets are generated locally and are **not stored in the Git repository**.
-
-This includes:
+The primary userspace executable is:
 
 ```text
-vmlinux
-initramfs.cpio.gz
-rootfs.img
+/sbin/kernlet-agent
 ```
 
-Kernlet currently uses:
+The same executable is currently reused as a small process-execution workload through:
 
-* a container-oriented Linux kernel
-* Alpine Linux as the minimal guest userspace
-* an ext4 root filesystem
-
-Development assets can be prepared with:
-
-```bash
-make applevm-assets
+```text
+/proc/self/exe --version
 ```
 
-The generated files are stored under:
+This avoids adding temporary guest utilities that are not required by the runtime.
+
+## Runtime assets
+
+VM runtime assets are generated locally and are not committed to Git.
 
 ```text
 .local/applevm/
+├── vmlinux
+└── rootfs.img
 ```
 
-These assets are implementation details of the runtime and should not be committed to Git.
+Kernlet currently uses a prebuilt Kata Containers kernel as its bootstrap kernel.
 
----
+The root filesystem is Kernlet-owned and built locally as an ext4 disk image. It contains the statically linked `kernlet-agent`.
 
-## Running the AppleVM smoke test
+The current boot path does not require an initramfs:
+
+```text
+vmlinux
+   │
+   ▼
+VirtIO block device
+   │
+   ▼
+/dev/vda
+   │
+   ▼
+ext4 root filesystem
+   │
+   ▼
+/sbin/kernlet-agent
+```
+
+The Kata kernel remains a bootstrap dependency while Kernlet's container-runtime architecture is developed. A Kernlet-specific kernel configuration can replace it when internal runtime requirements justify maintaining one.
+
+## Host-to-guest protocol
+
+The macOS host and Linux guest communicate using newline-delimited JSON over VirtIO vsock.
+
+The shared protocol is defined in:
+
+```text
+internal/guestproto/protocol.go
+```
+
+The guest listens on:
+
+```text
+vsock port 10789
+```
+
+### Health request
+
+```json
+{
+  "id": 1,
+  "method": "ping"
+}
+```
+
+Response:
+
+```json
+{
+  "id": 1,
+  "ok": true,
+  "message": "pong"
+}
+```
+
+### Process request
+
+```json
+{
+  "id": 1,
+  "method": "run",
+  "args": [
+    "/proc/self/exe",
+    "--version"
+  ]
+}
+```
+
+Successful response:
+
+```json
+{
+  "id": 1,
+  "ok": true,
+  "message": "kernlet-agent\n"
+}
+```
+
+The argument vector maps directly to process execution:
+
+```text
+args[0]   executable
+args[1:]  executable arguments
+```
+
+Kernlet does not invoke a shell when executing the request.
+
+This means the following shell features are not interpreted:
+
+```text
+;
+|
+>
+$()
+```
+
+They remain ordinary argument data unless the requested executable interprets them itself.
+
+The current protocol assumes a trusted host-to-guest control channel. It is not intended to be exposed directly to untrusted clients.
+
+## Process execution
+
+The current Linux runtime executes one-shot processes synchronously.
+
+```text
+run request
+    │
+    ▼
+validate arguments
+    │
+    ▼
+start process
+    │
+    ▼
+capture stdout and stderr
+    │
+    ▼
+wait for exit
+    │
+    ▼
+return response
+```
+
+This is sufficient for short internal runtime operations and proves the host-to-guest execution path.
+
+Long-running containers will require a lifecycle protocol for:
+
+- process creation;
+- process identifiers;
+- output streaming;
+- process status;
+- signals;
+- termination;
+- exit events.
+
+That lifecycle will be added after the isolation layers are working.
+
+## Building and running
 
 ### Requirements
 
-Currently:
+The current AppleVM implementation requires:
 
-* macOS
-* Apple Silicon (`arm64`)
-* Go with cgo enabled
-* Xcode Command Line Tools
-* Homebrew
-* `e2fsprogs`
+- macOS;
+- Apple Silicon;
+- Go with cgo enabled;
+- Xcode Command Line Tools;
+- Homebrew;
+- `e2fsprogs`.
 
 Install the filesystem tooling:
 
@@ -215,44 +406,50 @@ Install the filesystem tooling:
 brew install e2fsprogs
 ```
 
-Prepare the VM:
+Prepare the Linux kernel and root filesystem:
 
 ```bash
 make applevm-assets
 ```
 
-Build and sign the smoke-test executable:
+Build and sign the AppleVM smoke executable:
 
 ```bash
 make applevm-smoke
 ```
 
-Run it:
+Boot the VM and run the process-execution smoke test:
 
 ```bash
 make applevm-run
 ```
 
-A successful boot should eventually reach the Kernlet guest environment:
+A successful run includes:
 
 ```text
+Run /sbin/kernlet-agent as init process
+kernlet-agent: starting as PID 1
+
 ================================
-      KERNLET LINUX IS ALIVE
+       KERNLET GUEST READY
 ================================
+
+kernlet-agent: listening on vsock port 10789
+connecting to kernlet-agent...
+requesting guest process...
+guest process output: kernlet-agent
+press Ctrl-C to stop
 ```
 
-Inside the VM:
+Stop the VM using `Ctrl-C`.
+
+Remove generated AppleVM assets:
 
 ```bash
-uname -a
-cat /etc/alpine-release
-mount
-ls -l /dev/vda
+make applevm-clean
 ```
 
----
-
-## Repository Layout
+## Repository layout
 
 ```text
 .
@@ -260,112 +457,97 @@ ls -l /dev/vda
 │   └── applevm.entitlements
 │
 ├── cmd/
-│   └── applevm-smoke/
+│   ├── applevm-smoke/
+│   │   └── main.go
+│   ├── kernlet/
+│   │   └── main.go
+│   └── kernlet-agent/
+│       └── main_linux.go
 │
 ├── hack/
 │   └── applevm/
 │       └── prepare-assets.sh
 │
+├── internal/
+│   ├── guestproto/
+│   │   └── protocol.go
+│   ├── platform/
+│   │   ├── run_darwin.go
+│   │   └── run_linux.go
+│   └── runtime/
+│       └── run_linux.go
+│
 ├── pkg/
 │   └── applevm/
+│       ├── applevm_bridge.h
+│       ├── applevm_bridge_darwin.m
+│       ├── bridge_darwin.go
 │       ├── config.go
+│       ├── conn.go
 │       ├── errors.go
 │       ├── vm_darwin.go
-│       ├── vm_unsupported.go
-│       ├── bridge_darwin.go
-│       ├── applevm_bridge.h
-│       └── applevm_bridge_darwin.m
+│       └── vm_unsupported.go
 │
-└── Makefile
+├── Makefile
+├── README.md
+├── go.mod
+└── go.sum
 ```
 
----
+## Project status
 
-## Project Status
+| Component | Status |
+| --- | --- |
+| Apple Virtualization integration | Working |
+| Direct Linux kernel boot | Working |
+| Minimal Kernlet root filesystem | Working |
+| `kernlet-agent` as PID 1 | Working |
+| VirtIO vsock | Working |
+| JSON request and response protocol | Working |
+| Host-to-guest health check | Working |
+| Guest process argument protocol | Working |
+| Guest process execution | Working |
+| Guest process output capture | Working |
+| UTS namespace isolation | Next |
+| PID namespace isolation | Planned |
+| Mount namespace isolation | Planned |
+| Container root filesystem | Planned |
+| Process security controls | Planned |
+| cgroups v2 resource control | Planned |
+| OCI image execution | Planned |
+| Container networking | Planned |
+| Complete container lifecycle | Planned |
 
-Kernlet is under active development and is already used within KodLabs systems.
+## Runtime roadmap
 
-The runtime is being built as independent layers so that virtualization, Linux container execution, image management, networking, and higher-level APIs remain cleanly separated.
+The Linux runtime will be developed in the following order:
 
-| Component                                           | Status      |
-| --------------------------------------------------- | ----------- |
-| Apple Virtualization integration                    | Working     |
-| Direct Linux kernel boot                            | Working     |
-| VirtIO block storage                                | Working     |
-| Serial console                                      | Working     |
-| Linux root filesystem boot                          | Working     |
-| Linux container runtime                             | In progress |
-| Guest agent                                         | Planned     |
-| OCI image execution                                 | Planned     |
-| Container networking                                | Planned     |
-| Resource isolation with cgroups                     | Planned     |
-| Runtime distribution and automatic asset management | Planned     |
+1. Execute an ordinary Linux child process over vsock. **Complete**
+2. Add UTS namespace isolation and a private hostname.
+3. Add PID namespace isolation and container PID 1 behavior.
+4. Add mount namespace isolation and a private `/proc`.
+5. Add an isolated container root filesystem.
+6. Apply UID, GID, capabilities, and `no_new_privs`.
+7. Apply CPU, memory, and process limits with cgroups v2.
+8. Read an OCI image layout and prepare its runtime filesystem.
+9. Add network namespace isolation and container networking.
+10. Add the complete container process lifecycle.
 
-### Runtime Roadmap
+## Next milestone
 
-The current macOS runtime uses a prebuilt Kata Containers Linux kernel and Alpine Linux as a minimal guest userspace. These are bootstrap dependencies while Kernlet's runtime architecture is being developed.
-
-The long-term runtime will move toward:
+The next runtime milestone is UTS namespace isolation.
 
 ```text
-Kernlet
-   │
-   ▼
-Apple Virtualization.framework
-   │
-   ▼
-Kernlet Linux Kernel
-   │
-   ▼
-Minimal Kernlet Root Filesystem
-   │
-   ├── kernlet-agent
-   ├── container runtime
-   ├── networking
-   └── required Linux utilities
-   │
-   ▼
-OCI Containers
+kernlet-agent
+      │
+      │ create child process
+      ▼
+new UTS namespace
+      │
+      ├── private hostname
+      └── private domain name
 ```
 
-Planned runtime improvements include:
+The process will remain an ordinary guest process in every other respect.
 
-* Build and maintain a Kernlet-specific Linux kernel configuration instead of depending on a prebuilt Kata kernel.
-* Replace the Alpine-based guest environment with a minimal Kernlet-owned root filesystem.
-* Boot directly from the root filesystem where possible, removing unnecessary early-userspace layers such as the external initramfs.
-* Introduce a Kernlet guest agent for communication between the macOS host and Linux runtime.
-* Execute OCI images using native Linux namespaces, mounts, processes, and cgroups.
-* Add container networking and host-to-guest communication.
-* Distribute versioned, verified runtime bundles automatically so users don't need to manually prepare kernels or Linux disk images.
-* Keep the macOS virtualization layer independent from the Linux container runtime so both can evolve separately.
-
-The goal is for the Linux VM to eventually become an implementation detail: users interact with Kernlet and containers, not with VM setup or Linux boot artifacts.
-
----
-
-## Direction
-
-Kernlet is being built toward a runtime where applications can request a container without needing to know whether Linux is running directly on the host or inside a lightweight VM.
-
-Conceptually:
-
-```text
-kernlet run <image>
-       │
-       ▼
-Kernlet
-       │
-       ├── prepare Linux environment
-       ├── prepare OCI filesystem
-       ├── create isolation
-       ├── configure resources
-       └── start process
-```
-
-On Linux this can happen directly against the host kernel.
-
-On macOS, Kernlet first provides the required Linux environment through Apple Virtualization.
-
-The platform changes.
-
-The container model does not.
+This isolates one kernel resource at a time and keeps failures attributable to the layer being introduced.

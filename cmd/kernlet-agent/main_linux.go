@@ -11,10 +11,16 @@ import (
 	"syscall"
 
 	"github.com/kodlabs-in/kernlet/internal/guestproto"
+	kernruntime "github.com/kodlabs-in/kernlet/internal/runtime"
 	"golang.org/x/sys/unix"
 )
 
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == "--version" {
+		fmt.Println("kernlet-agent")
+		return
+	}
+
 	fmt.Printf("kernlet-agent: starting as PID %d\n", os.Getpid())
 
 	mustMount("proc", "/proc", "proc")
@@ -111,6 +117,23 @@ func handleRequest(request guestproto.Request) guestproto.Response {
 			ID:      request.ID,
 			OK:      true,
 			Message: "pong",
+		}
+
+	case "run":
+		output, err := kernruntime.Run(request.Args)
+		if err != nil {
+			return guestproto.Response{
+				ID:      request.ID,
+				OK:      false,
+				Message: output,
+				Error:   err.Error(),
+			}
+		}
+
+		return guestproto.Response{
+			ID:      request.ID,
+			OK:      true,
+			Message: output,
 		}
 
 	default:
