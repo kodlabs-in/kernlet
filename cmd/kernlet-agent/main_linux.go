@@ -55,7 +55,21 @@ func main() {
 			os.Exit(1)
 		}
 
-		fmt.Printf("hostname=%s pid=%d ppid=%d proc-self=%s cwd=%s root=%s\n", hostname, os.Getpid(), os.Getppid(), procSelf, cwd, procRoot)
+		rootfsMarker, err := os.ReadFile("/etc/kernlet-rootfs")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "kernlet-agent: read rootfs marker: %v\n", err)
+			os.Exit(1)
+		}
+
+		oldRoot := "hidden"
+		if _, err := os.Stat("/.oldroot"); err == nil {
+			oldRoot = "visible"
+		} else if !errors.Is(err, os.ErrNotExist) {
+			fmt.Fprintf(os.Stderr, "kernlet-agent: inspect old root: %v\n", err)
+			os.Exit(1)
+		}
+
+		fmt.Printf("hostname=%s pid=%d ppid=%d proc-self=%s cwd=%s root=%s rootfs=%s old-root=%s\n", hostname, os.Getpid(), os.Getppid(), procSelf, cwd, procRoot, string(rootfsMarker), oldRoot)
 
 		return
 	}
@@ -159,7 +173,7 @@ func handleRequest(request guestproto.Request) guestproto.Response {
 		}
 
 	case "run":
-		output, err := kernruntime.Run(request.Args, request.Hostname)
+		output, err := kernruntime.Run(request.Args, request.Hostname, request.Rootfs)
 		if err != nil {
 			return guestproto.Response{
 				ID:      request.ID,

@@ -7,6 +7,7 @@ type Request struct {
 	Method   string   `json:"method"`
 	Args     []string `json:"args,omitempty"`
 	Hostname string   `json:"hostname,omitempty"`
+	Rootfs   string   `json:"rootfs,omitempty"`
 }
 
 type Response struct {

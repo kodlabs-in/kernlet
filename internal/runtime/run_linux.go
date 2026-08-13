@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"syscall"
 )
@@ -12,7 +13,7 @@ const InitCommand = "runtime-init"
 
 const maxHostnameLength = 64
 
-func Run(command []string, hostname string) (string, error) {
+func Run(command []string, hostname string, rootfs string) (string, error) {
 	if len(command) == 0 {
 		return "", fmt.Errorf("no command provided")
 	}
@@ -21,9 +22,15 @@ func Run(command []string, hostname string) (string, error) {
 		return "", fmt.Errorf("invalid hostname: %w", err)
 	}
 
-	args := make([]string, 0, len(command)+2)
+	rootfs = filepath.Clean(rootfs)
 
-	args = append(args, InitCommand, hostname)
+	if err := validateRootfs(rootfs); err != nil {
+		return "", fmt.Errorf("invalid rootfs: %w", err)
+	}
+
+	args := make([]string, 0, len(command)+3)
+
+	args = append(args, InitCommand, hostname, rootfs)
 
 	args = append(args, command...)
 
@@ -42,15 +49,20 @@ func Run(command []string, hostname string) (string, error) {
 }
 
 func InitProcess(args []string) error {
-	if len(args) < 2 {
-		return fmt.Errorf("runtime init requires hostname and command")
+	if len(args) < 3 {
+		return fmt.Errorf("runtime init requires hostname, rootfs and command")
 	}
 
 	hostname := args[0]
-	command := args[1:]
+	rootfs := filepath.Clean(args[1])
+	command := args[2:]
 
 	if err := validateHostname(hostname); err != nil {
 		return fmt.Errorf("invalid hostname: %w", err)
+	}
+
+	if err := validateRootfs(rootfs); err != nil {
+		return fmt.Errorf("invalid rootfs: %w", err)
 	}
 
 	if err := syscall.Sethostname([]byte(hostname)); err != nil {
@@ -59,6 +71,31 @@ func InitProcess(args []string) error {
 
 	if err := syscall.Mount("", "/", "", syscall.MS_REC|syscall.MS_PRIVATE, ""); err != nil {
 		return fmt.Errorf("make mounts private: %w", err)
+	}
+
+	if err := syscall.Mount(rootfs, rootfs, "", syscall.MS_BIND, ""); err != nil {
+		return fmt.Errorf("bind rootfs: %w", err)
+	}
+
+	oldRoot := filepath.Join(rootfs, ".oldroot")
+	if err := os.Mkdir(oldRoot, 0700); err != nil {
+		return fmt.Errorf("create old root directory: %w", err)
+	}
+
+	if err := syscall.PivotRoot(rootfs, oldRoot); err != nil {
+		return fmt.Errorf("pivot root: %w", err)
+	}
+
+	if err := os.Chdir("/"); err != nil {
+		return fmt.Errorf("change directory to new root: %w", err)
+	}
+
+	if err := syscall.Unmount("/.oldroot", syscall.MNT_DETACH); err != nil {
+		return fmt.Errorf("detach old root: %w", err)
+	}
+
+	if err := os.Remove("/.oldroot"); err != nil {
+		return fmt.Errorf("remove old root directory: %w", err)
 	}
 
 	if err := syscall.Mount("proc", "/proc", "proc", syscall.MS_NOSUID|syscall.MS_NOEXEC|syscall.MS_NODEV, ""); err != nil {
@@ -88,6 +125,27 @@ func validateHostname(hostname string) error {
 
 	if strings.IndexByte(hostname, 0) >= 0 {
 		return fmt.Errorf("hostname contains a null byte")
+	}
+
+	return nil
+}
+
+func validateRootfs(rootfs string) error {
+	if !filepath.IsAbs(rootfs) {
+		return fmt.Errorf("rootfs must be an absolute path")
+	}
+
+	if rootfs == "/" {
+		return fmt.Errorf("rootfs cannot be the guest root")
+	}
+
+	info, err := os.Stat(rootfs)
+	if err != nil {
+		return fmt.Errorf("stat rootfs: %w", err)
+	}
+
+	if !info.IsDir() {
+		return fmt.Errorf("rootfs is not a directory")
 	}
 
 	return nil

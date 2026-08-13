@@ -81,6 +81,7 @@ file "$WORK/kernlet-agent"
 echo "==> Building Kernlet root filesystem"
 
 ROOTFS_SRC="$WORK/rootfs"
+WORKLOAD_ROOTFS="$ROOTFS_SRC/var/lib/kernlet/rootfs"
 
 rm -rf "$ROOTFS_SRC"
 
@@ -90,14 +91,31 @@ mkdir -p \
     "$ROOTFS_SRC/sys" \
     "$ROOTFS_SRC/run" \
     "$ROOTFS_SRC/tmp" \
-    "$ROOTFS_SRC/sbin"
+    "$ROOTFS_SRC/sbin" \
+    "$WORKLOAD_ROOTFS/dev" \
+    "$WORKLOAD_ROOTFS/etc" \
+    "$WORKLOAD_ROOTFS/proc" \
+    "$WORKLOAD_ROOTFS/run" \
+    "$WORKLOAD_ROOTFS/sbin" \
+    "$WORKLOAD_ROOTFS/sys" \
+    "$WORKLOAD_ROOTFS/tmp"
 
-chmod 1777 "$ROOTFS_SRC/tmp"
+chmod 1777 \
+    "$ROOTFS_SRC/tmp" \
+    "$WORKLOAD_ROOTFS/tmp"
 
 install \
     -m 0755 \
     "$WORK/kernlet-agent" \
     "$ROOTFS_SRC/sbin/kernlet-agent"
+
+install \
+    -m 0755 \
+    "$WORK/kernlet-agent" \
+    "$WORKLOAD_ROOTFS/sbin/kernlet-agent"
+
+printf "kernlet-workload" \
+    > "$WORKLOAD_ROOTFS/etc/kernlet-rootfs"
 
 # ---------------------------------------------------------
 # ext4 disk
