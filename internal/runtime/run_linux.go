@@ -30,7 +30,7 @@ func Run(command []string, hostname string) (string, error) {
 	cmd := exec.Command("/proc/self/exe", args...)
 
 	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Cloneflags: syscall.CLONE_NEWUTS | syscall.CLONE_NEWPID,
+		Cloneflags: syscall.CLONE_NEWUTS | syscall.CLONE_NEWPID | syscall.CLONE_NEWNS,
 	}
 
 	output, err := cmd.CombinedOutput()
@@ -55,6 +55,14 @@ func InitProcess(args []string) error {
 
 	if err := syscall.Sethostname([]byte(hostname)); err != nil {
 		return fmt.Errorf("set hostname %q: %w", hostname, err)
+	}
+
+	if err := syscall.Mount("", "/", "", syscall.MS_REC|syscall.MS_PRIVATE, ""); err != nil {
+		return fmt.Errorf("make mounts private: %w", err)
+	}
+
+	if err := syscall.Mount("proc", "/proc", "proc", syscall.MS_NOSUID|syscall.MS_NOEXEC|syscall.MS_NODEV, ""); err != nil {
+		return fmt.Errorf("mount private proc filesystem: %w", err)
 	}
 
 	path, err := exec.LookPath(command[0])

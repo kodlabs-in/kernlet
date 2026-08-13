@@ -37,7 +37,25 @@ func main() {
 			os.Exit(1)
 		}
 
-		fmt.Printf("hostname=%s pid=%d ppid=%d\n", hostname, os.Getpid(), os.Getppid())
+		procSelf, err := os.Readlink("/proc/self")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "kernlet-agent: read /proc/self: %v\n", err)
+			os.Exit(1)
+		}
+
+		procRoot, err := os.Readlink("/proc/self/root")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "kernlet-agent: read /proc/self/root: %v\n", err)
+			os.Exit(1)
+		}
+
+		cwd, err := os.Getwd()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "kernlet-agent: get cw: %v\n", err)
+			os.Exit(1)
+		}
+
+		fmt.Printf("hostname=%s pid=%d ppid=%d proc-self=%s cwd=%s root=%s\n", hostname, os.Getpid(), os.Getppid(), procSelf, cwd, procRoot)
 
 		return
 	}
