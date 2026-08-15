@@ -5,15 +5,19 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	goruntime "runtime"
+	"strconv"
 	"strings"
 	"syscall"
+
+	"golang.org/x/sys/unix"
 )
 
 const InitCommand = "runtime-init"
 
 const maxHostnameLength = 64
 
-func Run(command []string, hostname string, rootfs string) (string, error) {
+func Run(command []string, hostname string, rootfs string, uid uint32, gid uint32) (string, error) {
 	if len(command) == 0 {
 		return "", fmt.Errorf("no command provided")
 	}
@@ -28,9 +32,9 @@ func Run(command []string, hostname string, rootfs string) (string, error) {
 		return "", fmt.Errorf("invalid rootfs: %w", err)
 	}
 
-	args := make([]string, 0, len(command)+3)
+	args := make([]string, 0, len(command)+5)
 
-	args = append(args, InitCommand, hostname, rootfs)
+	args = append(args, InitCommand, hostname, rootfs, strconv.FormatUint(uint64(uid), 10), strconv.FormatUint(uint64(gid), 10))
 
 	args = append(args, command...)
 
@@ -49,13 +53,27 @@ func Run(command []string, hostname string, rootfs string) (string, error) {
 }
 
 func InitProcess(args []string) error {
-	if len(args) < 3 {
-		return fmt.Errorf("runtime init requires hostname, rootfs and command")
+	goruntime.LockOSThread()
+	defer goruntime.UnlockOSThread()
+
+	if len(args) < 5 {
+		return fmt.Errorf("runtime init requires hostname, rootfs, UID, GID and command")
 	}
 
 	hostname := args[0]
 	rootfs := filepath.Clean(args[1])
-	command := args[2:]
+
+	uid, err := parseID("UID", args[2])
+	if err != nil {
+		return err
+	}
+
+	gid, err := parseID("GID", args[3])
+	if err != nil {
+		return err
+	}
+
+	command := args[4:]
 
 	if err := validateHostname(hostname); err != nil {
 		return fmt.Errorf("invalid hostname: %w", err)
@@ -63,6 +81,10 @@ func InitProcess(args []string) error {
 
 	if err := validateRootfs(rootfs); err != nil {
 		return fmt.Errorf("invalid rootfs: %w", err)
+	}
+
+	if err := validateIdentity(uid, gid); err != nil {
+		return fmt.Errorf("invalid identity: %w", err)
 	}
 
 	if err := syscall.Sethostname([]byte(hostname)); err != nil {
@@ -107,6 +129,30 @@ func InitProcess(args []string) error {
 		return fmt.Errorf("find executable %q: %w", command[0], err)
 	}
 
+	if err := unix.Prctl(unix.PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0); err != nil {
+		return fmt.Errorf("set no new privileges: %w", err)
+	}
+
+	if err := dropCapabilityBoundingSet(); err != nil {
+		return err
+	}
+
+	if err := syscall.Setgroups([]int{}); err != nil {
+		return fmt.Errorf("clear supplementary groups: %w", err)
+	}
+
+	if err := syscall.Setresgid(int(gid), int(gid), int(gid)); err != nil {
+		return fmt.Errorf("set workload GID %d: %w", gid, err)
+	}
+
+	if err := syscall.Setresuid(int(uid), int(uid), int(uid)); err != nil {
+		return fmt.Errorf("set workload UID %d: %w", uid, err)
+	}
+
+	if err := clearCapabilities(); err != nil {
+		return err
+	}
+
 	if err := syscall.Exec(path, command, os.Environ()); err != nil {
 		return fmt.Errorf("exec %q: %w", command[0], err)
 	}
@@ -146,6 +192,61 @@ func validateRootfs(rootfs string) error {
 
 	if !info.IsDir() {
 		return fmt.Errorf("rootfs is not a directory")
+	}
+
+	return nil
+}
+
+func validateIdentity(uid uint32, gid uint32) error {
+	if uid == 0 {
+		return fmt.Errorf("workload UID must be nonzero")
+	}
+
+	if gid == 0 {
+		return fmt.Errorf("workload GID must be nonzero")
+	}
+
+	return nil
+}
+
+func parseID(name string, value string) (uint32, error) {
+	id, err := strconv.ParseUint(value, 10, 32)
+	if err != nil {
+		return 0, fmt.Errorf("parse %s %q: %w", name, value, err)
+	}
+
+	return uint32(id), nil
+}
+
+func dropCapabilityBoundingSet() error {
+	value, err := os.ReadFile("/proc/sys/kernel/cap_last_cap")
+	if err != nil {
+		return fmt.Errorf("read last capability: %w", err)
+	}
+
+	lastCapability, err := strconv.Atoi(strings.TrimSpace(string(value)))
+	if err != nil {
+		return fmt.Errorf("parse last capability: %w", err)
+	}
+
+	for capability := 0; capability <= lastCapability; capability++ {
+		if err := unix.Prctl(unix.PR_CAPBSET_DROP, uintptr(capability), 0, 0, 0); err != nil {
+			return fmt.Errorf("drop capability %d from bounding set: %w", capability, err)
+		}
+	}
+
+	return nil
+}
+
+func clearCapabilities() error {
+	header := unix.CapUserHeader{
+		Version: unix.LINUX_CAPABILITY_VERSION_3,
+	}
+
+	data := [2]unix.CapUserData{}
+
+	if err := unix.Capset(&header, &data[0]); err != nil {
+		return fmt.Errorf("clear capability sets: %w", err)
 	}
 
 	return nil

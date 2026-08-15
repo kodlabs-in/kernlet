@@ -82,6 +82,8 @@ func main() {
 		Method:   "run",
 		Hostname: "kernlet-workload",
 		Rootfs:   "/var/lib/kernlet/rootfs",
+		UID:      65532,
+		GID:      65532,
 		Args: []string{
 			"/sbin/kernlet-agent",
 			"--identity",

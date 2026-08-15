@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"syscall"
 
 	"github.com/kodlabs-in/kernlet/internal/guestproto"
@@ -69,7 +70,76 @@ func main() {
 			os.Exit(1)
 		}
 
-		fmt.Printf("hostname=%s pid=%d ppid=%d proc-self=%s cwd=%s root=%s rootfs=%s old-root=%s\n", hostname, os.Getpid(), os.Getppid(), procSelf, cwd, procRoot, string(rootfsMarker), oldRoot)
+		groups, err := os.Getgroups()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "kernlet-agent: read groups: %v\n", err)
+			os.Exit(1)
+		}
+
+		status, err := os.ReadFile("/proc/self/status")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "kernlet-agent: read process status: %v\n", err)
+			os.Exit(1)
+		}
+
+		capInh, err := statusField(status, "CapInh")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+
+		capPrm, err := statusField(status, "CapPrm")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+
+		capEff, err := statusField(status, "CapEff")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+
+		capBnd, err := statusField(status, "CapBnd")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+
+		capAmb, err := statusField(status, "CapAmb")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+
+		noNewPrivs, err := statusField(status, "NoNewPrivs")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+
+		fmt.Printf(
+			"hostname=%s pid=%d ppid=%d proc-self=%s cwd=%s root=%s rootfs=%s old-root=%s uid=%d euid=%d gid=%d egid=%d groups=%d cap-inh=%s cap-prm=%s cap-eff=%s cap-bnd=%s cap-amb=%s no-new-privs=%s\n",
+			hostname,
+			os.Getpid(),
+			os.Getppid(),
+			procSelf,
+			cwd,
+			procRoot,
+			string(rootfsMarker),
+			oldRoot,
+			os.Getuid(),
+			os.Geteuid(),
+			os.Getgid(),
+			os.Getegid(),
+			len(groups),
+			capInh,
+			capPrm,
+			capEff,
+			capBnd,
+			capAmb,
+			noNewPrivs,
+		)
 
 		return
 	}
@@ -173,7 +243,7 @@ func handleRequest(request guestproto.Request) guestproto.Response {
 		}
 
 	case "run":
-		output, err := kernruntime.Run(request.Args, request.Hostname, request.Rootfs)
+		output, err := kernruntime.Run(request.Args, request.Hostname, request.Rootfs, request.UID, request.GID)
 		if err != nil {
 			return guestproto.Response{
 				ID:      request.ID,
@@ -210,4 +280,18 @@ func mustMount(source, target, fsType string) {
 
 		panic(fmt.Errorf("mount %s on %s: %w", fsType, target, err))
 	}
+}
+
+func statusField(status []byte, name string) (string, error) {
+	prefix := name + ":"
+
+	for _, line := range strings.Split(string(status), "\n") {
+		fields := strings.Fields(line)
+
+		if len(fields) >= 2 && fields[0] == prefix {
+			return strings.Join(fields[1:], ","), nil
+		}
+	}
+
+	return "", fmt.Errorf("kernlet-agent: process status field %s is missing", name)
 }

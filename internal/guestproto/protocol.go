@@ -8,6 +8,8 @@ type Request struct {
 	Args     []string `json:"args,omitempty"`
 	Hostname string   `json:"hostname,omitempty"`
 	Rootfs   string   `json:"rootfs,omitempty"`
+	UID      uint32   `json:"uid,omitempty"`
+	GID      uint32   `json:"gid,omitempty"`
 }
 
 type Response struct {
