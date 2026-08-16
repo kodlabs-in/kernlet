@@ -7,9 +7,7 @@ type Request struct {
 	Method   string   `json:"method"`
 	Args     []string `json:"args,omitempty"`
 	Hostname string   `json:"hostname,omitempty"`
-	Rootfs   string   `json:"rootfs,omitempty"`
-	UID      uint32   `json:"uid,omitempty"`
-	GID      uint32   `json:"gid,omitempty"`
+	Image    string   `json:"image,omitempty"`
 
 	MemoryMax uint64 `json:"memory_max,omitempty"`
 	PidsMax   uint64 `json:"pids_max,omitempty"`

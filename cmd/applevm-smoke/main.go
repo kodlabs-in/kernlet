@@ -81,17 +81,11 @@ func main() {
 		ID:        1,
 		Method:    "run",
 		Hostname:  "kernlet-workload",
-		Rootfs:    "/var/lib/kernlet/rootfs",
-		UID:       65532,
-		GID:       65532,
+		Image:     "/var/lib/kernlet/images/identity",
 		MemoryMax: 64 * 1024 * 1024,
 		PidsMax:   32,
 		CPUQuota:  50_000,
 		CPUPeriod: 100_000,
-		Args: []string{
-			"/sbin/kernlet-agent",
-			"--identity",
-		},
 	}
 
 	if err := encoder.Encode(request); err != nil {

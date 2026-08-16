@@ -12,6 +12,7 @@ import (
 	"syscall"
 
 	"github.com/kodlabs-in/kernlet/internal/guestproto"
+	"github.com/kodlabs-in/kernlet/internal/oci"
 	kernruntime "github.com/kodlabs-in/kernlet/internal/runtime"
 	"golang.org/x/sys/unix"
 )
@@ -255,12 +256,29 @@ func handleRequest(request guestproto.Request) guestproto.Response {
 		}
 
 	case "run":
-		output, err := kernruntime.Run(kernruntime.Config{
-			Command:  request.Args,
-			Hostname: request.Hostname,
-			Rootfs:   request.Rootfs,
-			UID:      request.UID,
-			GID:      request.GID,
+		bundle, err := oci.Prepare(request.Image)
+		if err != nil {
+			return guestproto.Response{
+				ID:    request.ID,
+				OK:    false,
+				Error: fmt.Sprintf("prepare image: %v", err),
+			}
+		}
+
+		command := bundle.Command
+
+		if len(request.Args) > 0 {
+			command = request.Args
+		}
+
+		output, runErr := kernruntime.Run(kernruntime.Config{
+			Command:     command,
+			Environment: bundle.Environment,
+			WorkingDir:  bundle.WorkingDir,
+			Hostname:    request.Hostname,
+			Rootfs:      bundle.Rootfs,
+			UID:         bundle.UID,
+			GID:         bundle.GID,
 			Limits: kernruntime.Limits{
 				MemoryMax: request.MemoryMax,
 				PidsMax:   request.PidsMax,
@@ -268,12 +286,34 @@ func handleRequest(request guestproto.Request) guestproto.Response {
 				CPUPeriod: request.CPUPeriod,
 			},
 		})
-		if err != nil {
+
+		cleanupErr := bundle.Close()
+
+		if runErr != nil {
+			errorMessage := runErr.Error()
+
+			if cleanupErr != nil {
+				errorMessage = fmt.Sprintf(
+					"%s; remove image bundle: %v",
+					errorMessage,
+					cleanupErr,
+				)
+			}
+
 			return guestproto.Response{
 				ID:      request.ID,
 				OK:      false,
 				Message: output,
-				Error:   err.Error(),
+				Error:   errorMessage,
+			}
+		}
+
+		if cleanupErr != nil {
+			return guestproto.Response{
+				ID:      request.ID,
+				OK:      false,
+				Message: output,
+				Error:   fmt.Sprintf("remove image bundle: %v", cleanupErr),
 			}
 		}
 
@@ -282,7 +322,6 @@ func handleRequest(request guestproto.Request) guestproto.Response {
 			OK:      true,
 			Message: output,
 		}
-
 	default:
 		return guestproto.Response{
 			ID:    request.ID,

@@ -31,12 +31,14 @@ type Limits struct {
 }
 
 type Config struct {
-	Command  []string
-	Hostname string
-	Rootfs   string
-	UID      uint32
-	GID      uint32
-	Limits   Limits
+	Command     []string
+	Environment []string
+	WorkingDir  string
+	Hostname    string
+	Rootfs      string
+	UID         uint32
+	GID         uint32
+	Limits      Limits
 }
 
 func SetupCgroups() error {
@@ -74,6 +76,18 @@ func Run(config Config) (string, error) {
 		return "", fmt.Errorf("invalid identity: %w", err)
 	}
 
+	workingDirectory := config.WorkingDir
+
+	if workingDirectory == "" {
+		workingDirectory = "/"
+	}
+
+	workingDirectory = filepath.Clean(workingDirectory)
+
+	if !filepath.IsAbs(workingDirectory) {
+		return "", fmt.Errorf("working directory must be absolute")
+	}
+
 	if err := validateLimits(config.Limits); err != nil {
 		return "", fmt.Errorf("invalid resource limits: %w", err)
 	}
@@ -83,7 +97,7 @@ func Run(config Config) (string, error) {
 		return "", err
 	}
 
-	args := make([]string, 0, len(config.Command)+5)
+	args := make([]string, 0, len(config.Command)+6)
 
 	args = append(
 		args,
@@ -92,11 +106,14 @@ func Run(config Config) (string, error) {
 		config.Rootfs,
 		strconv.FormatUint(uint64(config.UID), 10),
 		strconv.FormatUint(uint64(config.GID), 10),
+		workingDirectory,
 	)
 
 	args = append(args, config.Command...)
 
 	cmd := exec.Command("/proc/self/exe", args...)
+
+	cmd.Env = append([]string(nil), config.Environment...)
 
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Cloneflags:  syscall.CLONE_NEWUTS | syscall.CLONE_NEWPID | syscall.CLONE_NEWNS,
@@ -151,8 +168,8 @@ func InitProcess(args []string) error {
 	goruntime.LockOSThread()
 	defer goruntime.UnlockOSThread()
 
-	if len(args) < 5 {
-		return fmt.Errorf("runtime init requires hostname, rootfs, UID, GID and command")
+	if len(args) < 6 {
+		return fmt.Errorf("runtime init requires hostname, rootfs, UID, GID, working directory and command")
 	}
 
 	hostname := args[0]
@@ -168,7 +185,12 @@ func InitProcess(args []string) error {
 		return err
 	}
 
-	command := args[4:]
+	workingDirectory := filepath.Clean(args[4])
+	command := args[5:]
+
+	if !filepath.IsAbs(workingDirectory) {
+		return fmt.Errorf("working directory must be absolute")
+	}
 
 	if err := validateHostname(hostname); err != nil {
 		return fmt.Errorf("invalid hostname: %w", err)
@@ -224,6 +246,10 @@ func InitProcess(args []string) error {
 		"",
 	); err != nil {
 		return fmt.Errorf("mount private proc filesystem: %w", err)
+	}
+
+	if err := os.Chdir(workingDirectory); err != nil {
+		return fmt.Errorf("change directory to %q: %w", workingDirectory, err)
 	}
 
 	path, err := exec.LookPath(command[0])

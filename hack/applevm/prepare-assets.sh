@@ -75,15 +75,20 @@ echo "==> Guest agent binary"
 file "$WORK/kernlet-agent"
 
 # ---------------------------------------------------------
-# Minimal Kernlet root filesystem
+# Minimal Kernlet root filesystem and OCI image
 # ---------------------------------------------------------
 
 echo "==> Building Kernlet root filesystem"
 
 ROOTFS_SRC="$WORK/rootfs"
-WORKLOAD_ROOTFS="$ROOTFS_SRC/var/lib/kernlet/rootfs"
+IMAGE_ROOTFS="$WORK/identity-rootfs"
+OCI_WORK="$WORK/identity-oci"
+OCI_LAYOUT="$ROOTFS_SRC/var/lib/kernlet/images/identity"
 
-rm -rf "$ROOTFS_SRC"
+rm -rf \
+    "$ROOTFS_SRC" \
+    "$IMAGE_ROOTFS" \
+    "$OCI_WORK"
 
 mkdir -p \
     "$ROOTFS_SRC/dev" \
@@ -92,17 +97,19 @@ mkdir -p \
     "$ROOTFS_SRC/run" \
     "$ROOTFS_SRC/tmp" \
     "$ROOTFS_SRC/sbin" \
-    "$WORKLOAD_ROOTFS/dev" \
-    "$WORKLOAD_ROOTFS/etc" \
-    "$WORKLOAD_ROOTFS/proc" \
-    "$WORKLOAD_ROOTFS/run" \
-    "$WORKLOAD_ROOTFS/sbin" \
-    "$WORKLOAD_ROOTFS/sys" \
-    "$WORKLOAD_ROOTFS/tmp"
+    "$IMAGE_ROOTFS/dev" \
+    "$IMAGE_ROOTFS/etc" \
+    "$IMAGE_ROOTFS/proc" \
+    "$IMAGE_ROOTFS/run" \
+    "$IMAGE_ROOTFS/sbin" \
+    "$IMAGE_ROOTFS/sys" \
+    "$IMAGE_ROOTFS/tmp" \
+    "$OCI_WORK" \
+    "$OCI_LAYOUT/blobs/sha256"
 
 chmod 1777 \
     "$ROOTFS_SRC/tmp" \
-    "$WORKLOAD_ROOTFS/tmp"
+    "$IMAGE_ROOTFS/tmp"
 
 install \
     -m 0755 \
@@ -112,10 +119,145 @@ install \
 install \
     -m 0755 \
     "$WORK/kernlet-agent" \
-    "$WORKLOAD_ROOTFS/sbin/kernlet-agent"
+    "$IMAGE_ROOTFS/sbin/kernlet-agent"
 
 printf "kernlet-workload" \
-    > "$WORKLOAD_ROOTFS/etc/kernlet-rootfs"
+    > "$IMAGE_ROOTFS/etc/kernlet-rootfs"
+
+COPYFILE_DISABLE=1 tar \
+    -c \
+    --format pax \
+    --uid 0 \
+    --gid 0 \
+    --uname root \
+    --gname root \
+    -f "$OCI_WORK/layer.tar" \
+    -C "$IMAGE_ROOTFS" \
+    .
+
+gzip \
+    -n \
+    -c \
+    "$OCI_WORK/layer.tar" \
+    > "$OCI_WORK/layer.tar.gz"
+
+DIFF_ID="$(
+    shasum -a 256 "$OCI_WORK/layer.tar" |
+        awk '{print $1}'
+)"
+
+LAYER_DIGEST="$(
+    shasum -a 256 "$OCI_WORK/layer.tar.gz" |
+        awk '{print $1}'
+)"
+
+LAYER_SIZE="$(
+    wc -c < "$OCI_WORK/layer.tar.gz" |
+        tr -d ' '
+)"
+
+mv \
+    "$OCI_WORK/layer.tar.gz" \
+    "$OCI_LAYOUT/blobs/sha256/$LAYER_DIGEST"
+
+cat > "$OCI_WORK/config.json" <<EOF
+{
+  "architecture": "arm64",
+  "os": "linux",
+  "config": {
+    "User": "65532:65532",
+    "Env": [
+      "PATH=/sbin:/usr/sbin:/bin:/usr/bin"
+    ],
+    "Entrypoint": [
+      "/sbin/kernlet-agent"
+    ],
+    "Cmd": [
+      "--identity"
+    ],
+    "WorkingDir": "/"
+  },
+  "rootfs": {
+    "type": "layers",
+    "diff_ids": [
+      "sha256:$DIFF_ID"
+    ]
+  }
+}
+EOF
+
+CONFIG_DIGEST="$(
+    shasum -a 256 "$OCI_WORK/config.json" |
+        awk '{print $1}'
+)"
+
+CONFIG_SIZE="$(
+    wc -c < "$OCI_WORK/config.json" |
+        tr -d ' '
+)"
+
+mv \
+    "$OCI_WORK/config.json" \
+    "$OCI_LAYOUT/blobs/sha256/$CONFIG_DIGEST"
+
+cat > "$OCI_WORK/manifest.json" <<EOF
+{
+  "schemaVersion": 2,
+  "mediaType": "application/vnd.oci.image.manifest.v1+json",
+  "config": {
+    "mediaType": "application/vnd.oci.image.config.v1+json",
+    "digest": "sha256:$CONFIG_DIGEST",
+    "size": $CONFIG_SIZE
+  },
+  "layers": [
+    {
+      "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+      "digest": "sha256:$LAYER_DIGEST",
+      "size": $LAYER_SIZE
+    }
+  ]
+}
+EOF
+
+MANIFEST_DIGEST="$(
+    shasum -a 256 "$OCI_WORK/manifest.json" |
+        awk '{print $1}'
+)"
+
+MANIFEST_SIZE="$(
+    wc -c < "$OCI_WORK/manifest.json" |
+        tr -d ' '
+)"
+
+mv \
+    "$OCI_WORK/manifest.json" \
+    "$OCI_LAYOUT/blobs/sha256/$MANIFEST_DIGEST"
+
+cat > "$OCI_LAYOUT/index.json" <<EOF
+{
+  "schemaVersion": 2,
+  "manifests": [
+    {
+      "mediaType": "application/vnd.oci.image.manifest.v1+json",
+      "digest": "sha256:$MANIFEST_DIGEST",
+      "size": $MANIFEST_SIZE,
+      "platform": {
+        "architecture": "arm64",
+        "os": "linux"
+      },
+      "annotations": {
+        "org.opencontainers.image.ref.name": "identity"
+      }
+    }
+  ]
+}
+EOF
+
+cat > "$OCI_LAYOUT/oci-layout" <<EOF
+{
+  "imageLayoutVersion": "1.0.0"
+}
+EOF
 
 # ---------------------------------------------------------
 # ext4 disk
