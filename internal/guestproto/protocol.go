@@ -10,6 +10,11 @@ type Request struct {
 	Rootfs   string   `json:"rootfs,omitempty"`
 	UID      uint32   `json:"uid,omitempty"`
 	GID      uint32   `json:"gid,omitempty"`
+
+	MemoryMax uint64 `json:"memory_max,omitempty"`
+	PidsMax   uint64 `json:"pids_max,omitempty"`
+	CPUQuota  uint64 `json:"cpu_quota,omitempty"`
+	CPUPeriod uint64 `json:"cpu_period,omitempty"`
 }
 
 type Response struct {

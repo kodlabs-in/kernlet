@@ -118,8 +118,14 @@ func main() {
 			os.Exit(1)
 		}
 
+		cgroup, err := os.ReadFile("/proc/self/cgroup")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "kernlet-agent: read process cgropu: %v\n", err)
+			os.Exit(1)
+		}
+
 		fmt.Printf(
-			"hostname=%s pid=%d ppid=%d proc-self=%s cwd=%s root=%s rootfs=%s old-root=%s uid=%d euid=%d gid=%d egid=%d groups=%d cap-inh=%s cap-prm=%s cap-eff=%s cap-bnd=%s cap-amb=%s no-new-privs=%s\n",
+			"hostname=%s pid=%d ppid=%d proc-self=%s cwd=%s root=%s rootfs=%s old-root=%s uid=%d euid=%d gid=%d egid=%d groups=%d cap-inh=%s cap-prm=%s cap-eff=%s cap-bnd=%s cap-amb=%s no-new-privs=%s cgroup=%s\n",
 			hostname,
 			os.Getpid(),
 			os.Getppid(),
@@ -139,6 +145,7 @@ func main() {
 			capBnd,
 			capAmb,
 			noNewPrivs,
+			strings.TrimSpace(string(cgroup)),
 		)
 
 		return
@@ -148,6 +155,11 @@ func main() {
 
 	mustMount("proc", "/proc", "proc")
 	mustMount("sysfs", "/sys", "sysfs")
+	mustMount("none", "/sys/fs/cgroup", "cgroup2")
+
+	if err := kernruntime.SetupCgroups(); err != nil {
+		panic(fmt.Errorf("set up cgroups: %w", err))
+	}
 
 	fmt.Println()
 	fmt.Println("================================")
@@ -243,7 +255,19 @@ func handleRequest(request guestproto.Request) guestproto.Response {
 		}
 
 	case "run":
-		output, err := kernruntime.Run(request.Args, request.Hostname, request.Rootfs, request.UID, request.GID)
+		output, err := kernruntime.Run(kernruntime.Config{
+			Command:  request.Args,
+			Hostname: request.Hostname,
+			Rootfs:   request.Rootfs,
+			UID:      request.UID,
+			GID:      request.GID,
+			Limits: kernruntime.Limits{
+				MemoryMax: request.MemoryMax,
+				PidsMax:   request.PidsMax,
+				CPUQuota:  request.CPUQuota,
+				CPUPeriod: request.CPUPeriod,
+			},
+		})
 		if err != nil {
 			return guestproto.Response{
 				ID:      request.ID,
