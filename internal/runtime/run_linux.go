@@ -1,6 +1,8 @@
 package runtime
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -57,7 +59,7 @@ func SetupCgroups() error {
 	return nil
 }
 
-func Run(config Config) (string, error) {
+func Run(config Config) (output string, resultErr error) {
 	if len(config.Command) == 0 {
 		return "", fmt.Errorf("no command provided")
 	}
@@ -97,7 +99,36 @@ func Run(config Config) (string, error) {
 		return "", err
 	}
 
-	args := make([]string, 0, len(config.Command)+6)
+	defer func() {
+		if err := closeAndRemoveCgroup(cgroupPath, cgroupFD); err != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("clean up workload cgroup: %w", err))
+		}
+	}()
+
+	network, err := allocateWorkloadNetwork()
+	if err != nil {
+		return "", err
+	}
+
+	if err := createGuestNetwork(network); err != nil {
+		return "", err
+	}
+
+	defer func() {
+		if err := removeGuestNetwork(network); err != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("clean up workload network: %w", err))
+		}
+	}()
+
+	readyReader, readyWriter, err := os.Pipe()
+	if err != nil {
+		return "", fmt.Errorf("create network readiness pipe: %w", err)
+	}
+
+	defer readyReader.Close()
+	defer readyWriter.Close()
+
+	args := make([]string, 0, len(config.Command)+9)
 
 	args = append(
 		args,
@@ -107,69 +138,80 @@ func Run(config Config) (string, error) {
 		strconv.FormatUint(uint64(config.UID), 10),
 		strconv.FormatUint(uint64(config.GID), 10),
 		workingDirectory,
+		network.PeerInterface,
+		network.WorkloadAddress,
+		network.Gateway,
 	)
 
 	args = append(args, config.Command...)
 
 	cmd := exec.Command("/proc/self/exe", args...)
 
-	cmd.Env = append([]string(nil), config.Environment...)
+	cmd.Env = workloadEnvironment(config.Environment, network.Gateway)
+
+	cmd.ExtraFiles = []*os.File{readyReader}
 
 	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Cloneflags:  syscall.CLONE_NEWUTS | syscall.CLONE_NEWPID | syscall.CLONE_NEWNS,
+		Cloneflags:  syscall.CLONE_NEWUTS | syscall.CLONE_NEWPID | syscall.CLONE_NEWNS | syscall.CLONE_NEWNET,
 		UseCgroupFD: true,
 		CgroupFD:    int(cgroupFD.Fd()),
 	}
 
-	output, runErr := cmd.CombinedOutput()
+	var outputBuffer bytes.Buffer
 
-	closeErr := cgroupFD.Close()
+	cmd.Stdout = &outputBuffer
+	cmd.Stderr = &outputBuffer
 
-	var removeErr error
-
-	if closeErr == nil {
-		removeErr = os.Remove(cgroupPath)
+	if err := cmd.Start(); err != nil {
+		return outputBuffer.String(), fmt.Errorf("start %q: %w", config.Command[0], err)
 	}
 
-	if runErr != nil {
-		if closeErr != nil {
-			return string(output), fmt.Errorf(
-				"run %q: %w; close cgroup: %v",
-				config.Command[0],
-				runErr,
-				closeErr,
-			)
-		}
+	// The child owns its inherited descriptor now. The parent must
+	// close its copy so EOF works correctly if setup fails.
+	_ = readyReader.Close()
 
-		if removeErr != nil {
-			return string(output), fmt.Errorf(
-				"run %q: %w; remove cgroup: %v",
-				config.Command[0],
-				runErr,
-				removeErr,
-			)
-		}
+	if err := moveNetworkToProcess(network, cmd.Process.Pid); err != nil {
+		_ = readyWriter.Close()
+		_ = cmd.Wait()
 
-		return string(output), fmt.Errorf("run %q: %w", config.Command[0], runErr)
+		return outputBuffer.String(), err
 	}
 
-	if closeErr != nil {
-		return string(output), fmt.Errorf("close workload cgroup: %w", closeErr)
+	if _, err := readyWriter.Write([]byte{1}); err != nil {
+		_ = readyWriter.Close()
+		_ = cmd.Wait()
+
+		return outputBuffer.String(), fmt.Errorf("signal network readiness: %w", err)
 	}
 
-	if removeErr != nil {
-		return string(output), fmt.Errorf("remove workload cgroup: %w", removeErr)
+	if err := readyWriter.Close(); err != nil {
+		_ = cmd.Wait()
+
+		return outputBuffer.String(), fmt.Errorf("close network readiness pipe: %w", err)
 	}
 
-	return string(output), nil
+	if err := cmd.Wait(); err != nil {
+		return outputBuffer.String(), fmt.Errorf("run %q: %w", config.Command[0], err)
+	}
+
+	return outputBuffer.String(), nil
+}
+
+func closeAndRemoveCgroup(path string, fd *os.File) error {
+	closeErr := fd.Close()
+	removeErr := os.Remove(path)
+
+	return errors.Join(closeErr, removeErr)
 }
 
 func InitProcess(args []string) error {
 	goruntime.LockOSThread()
 	defer goruntime.UnlockOSThread()
 
-	if len(args) < 6 {
-		return fmt.Errorf("runtime init requires hostname, rootfs, UID, GID, working directory and command")
+	if len(args) < 9 {
+		return fmt.Errorf(
+			"runtime init requires hostname, rootfs, UID, GID, working directory, network configuration and command",
+		)
 	}
 
 	hostname := args[0]
@@ -186,7 +228,10 @@ func InitProcess(args []string) error {
 	}
 
 	workingDirectory := filepath.Clean(args[4])
-	command := args[5:]
+	peerInterface := args[5]
+	workloadAddress := args[6]
+	gatewayAddress := args[7]
+	command := args[8:]
 
 	if !filepath.IsAbs(workingDirectory) {
 		return fmt.Errorf("working directory must be absolute")
@@ -202,6 +247,14 @@ func InitProcess(args []string) error {
 
 	if err := validateIdentity(uid, gid); err != nil {
 		return fmt.Errorf("invalid identity: %w", err)
+	}
+
+	if err := waitForNetwork(); err != nil {
+		return err
+	}
+
+	if err := configureWorkloadNetwork(peerInterface, workloadAddress, gatewayAddress); err != nil {
+		return fmt.Errorf("configure workload network: %w", err)
 	}
 
 	if err := syscall.Sethostname([]byte(hostname)); err != nil {

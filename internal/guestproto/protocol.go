@@ -1,6 +1,12 @@
 package guestproto
 
-const Port uint32 = 10789
+const (
+	Port             uint32 = 10789
+	NetworkCheckPort        = 10790
+
+	NetworkCheckRequest  = "kernlet-network-check"
+	NetworkCheckResponse = "kernlet-network-ready"
+)
 
 type Request struct {
 	ID       uint64   `json:"id"`

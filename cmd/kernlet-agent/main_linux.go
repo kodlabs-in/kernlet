@@ -121,12 +121,36 @@ func main() {
 
 		cgroup, err := os.ReadFile("/proc/self/cgroup")
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "kernlet-agent: read process cgropu: %v\n", err)
+			fmt.Fprintf(os.Stderr, "kernlet-agent: read process cgroup: %v\n", err)
+			os.Exit(1)
+		}
+
+		networkNamespace, err := os.Readlink("/proc/self/ns/net")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "kernlet-agent: read network namespace: %v\n", err)
+			os.Exit(1)
+		}
+
+		interfaces, err := networkInterfaceSummary()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "kernlet-agent: read network interfaces: %v\n", err)
+			os.Exit(1)
+		}
+
+		gateway := os.Getenv("KERNLET_GATEWAY")
+
+		if gateway == "" {
+			fmt.Fprintln(os.Stderr, "kernlet-agent: network gateway is missing")
+			os.Exit(1)
+		}
+
+		if err := verifyGuestNetwork(gateway); err != nil {
+			fmt.Fprintf(os.Stderr, "kernlet-agent: verify workload network: %v\n", err)
 			os.Exit(1)
 		}
 
 		fmt.Printf(
-			"hostname=%s pid=%d ppid=%d proc-self=%s cwd=%s root=%s rootfs=%s old-root=%s uid=%d euid=%d gid=%d egid=%d groups=%d cap-inh=%s cap-prm=%s cap-eff=%s cap-bnd=%s cap-amb=%s no-new-privs=%s cgroup=%s\n",
+			"hostname=%s pid=%d ppid=%d proc-self=%s cwd=%s root=%s rootfs=%s old-root=%s uid=%d euid=%d gid=%d egid=%d groups=%d cap-inh=%s cap-prm=%s cap-eff=%s cap-bnd=%s cap-amb=%s no-new-privs=%s cgroup=%s netns=%s interfaces=%s gateway=%s network=ready\n",
 			hostname,
 			os.Getpid(),
 			os.Getppid(),
@@ -147,6 +171,9 @@ func main() {
 			capAmb,
 			noNewPrivs,
 			strings.TrimSpace(string(cgroup)),
+			networkNamespace,
+			interfaces,
+			gateway,
 		)
 
 		return
@@ -160,6 +187,17 @@ func main() {
 
 	if err := kernruntime.SetupCgroups(); err != nil {
 		panic(fmt.Errorf("set up cgroups: %w", err))
+	}
+
+	guestNetworkNamespace, err := os.Readlink("/proc/self/ns/net")
+	if err != nil {
+		panic(fmt.Errorf("read guest network namespace: %w", err))
+	}
+
+	fmt.Printf("kernlet-agent: guest network namespace %s\n", guestNetworkNamespace)
+
+	if err := startNetworkCheckServer(); err != nil {
+		panic(err)
 	}
 
 	fmt.Println()
