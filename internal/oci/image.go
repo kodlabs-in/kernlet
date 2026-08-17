@@ -89,10 +89,7 @@ func Prepare(layoutPath string) (*Bundle, error) {
 
 	var layout layoutFile
 
-	if err := readJSON(
-		filepath.Join(layoutPath, "oci-layout"),
-		&layout,
-	); err != nil {
+	if err := readJSON(filepath.Join(layoutPath, "oci-layout"), &layout); err != nil {
 		return nil, fmt.Errorf("read OCI layout: %w", err)
 	}
 

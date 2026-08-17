@@ -238,13 +238,7 @@ func InitProcess(args []string) error {
 		return fmt.Errorf("remove old root directory: %w", err)
 	}
 
-	if err := syscall.Mount(
-		"proc",
-		"/proc",
-		"proc",
-		syscall.MS_NOSUID|syscall.MS_NOEXEC|syscall.MS_NODEV,
-		"",
-	); err != nil {
+	if err := syscall.Mount("proc", "/proc", "proc", syscall.MS_NOSUID|syscall.MS_NOEXEC|syscall.MS_NODEV, ""); err != nil {
 		return fmt.Errorf("mount private proc filesystem: %w", err)
 	}
 
@@ -308,11 +302,7 @@ func enableControllers(path string) error {
 
 	value := "+cpu +memory +pids"
 
-	if err := os.WriteFile(
-		filepath.Join(path, "cgroup.subtree_control"),
-		[]byte(value),
-		0644,
-	); err != nil {
+	if err := os.WriteFile(filepath.Join(path, "cgroup.subtree_control"), []byte(value), 0644); err != nil {
 		return fmt.Errorf("write subtree control: %w", err)
 	}
 
@@ -332,11 +322,7 @@ func createCgroup(limits Limits) (string, *os.File, error) {
 	values := map[string]string{
 		"memory.max": strconv.FormatUint(limits.MemoryMax, 10),
 		"pids.max":   strconv.FormatUint(limits.PidsMax, 10),
-		"cpu.max": fmt.Sprintf(
-			"%d %d",
-			limits.CPUQuota,
-			limits.CPUPeriod,
-		),
+		"cpu.max":    fmt.Sprintf("%d %d", limits.CPUQuota, limits.CPUPeriod),
 	}
 
 	for name, value := range values {
@@ -371,12 +357,7 @@ func writeCgroupValue(path string, name string, value string) error {
 	actualFields := strings.Join(strings.Fields(string(actual)), " ")
 
 	if actualFields != expectedFields {
-		return fmt.Errorf(
-			"verify %s: expected %q, received %q",
-			name,
-			expectedFields,
-			actualFields,
-		)
+		return fmt.Errorf("verify %s: expected %q, received %q", name, expectedFields, actualFields)
 	}
 
 	return nil
@@ -472,18 +453,8 @@ func dropCapabilityBoundingSet() error {
 	}
 
 	for capability := 0; capability <= lastCapability; capability++ {
-		if err := unix.Prctl(
-			unix.PR_CAPBSET_DROP,
-			uintptr(capability),
-			0,
-			0,
-			0,
-		); err != nil {
-			return fmt.Errorf(
-				"drop capability %d from bounding set: %w",
-				capability,
-				err,
-			)
+		if err := unix.Prctl(unix.PR_CAPBSET_DROP, uintptr(capability), 0, 0, 0); err != nil {
+			return fmt.Errorf("drop capability %d from bounding set: %w", capability, err)
 		}
 	}
 
